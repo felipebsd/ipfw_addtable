@@ -1,29 +1,26 @@
-Add O_ADDTABLE opcode and ipfw_insn_addtable struct to ip_fw.h.
+Add O_ADDTABLE opcode and ipfw_insn_addtable struct to sys/netinet/ip_fw.h.
 
 The opcode is inserted just before O_LAST_OPCODE so it receives the next
 available slot and does not disturb any existing values.
 
-The instruction struct carries the table number in o.arg1 and a flags
-byte indicating whether the source (default) or destination address
-should be added to the table.
-
-ADDTABLE_F_DST is defined here (not in ip_fw_addtable.h) so that it is
-visible to userspace without requiring the kernel-private header.
-
---- a/sys/netpfil/ipfw/ip_fw.h
-+++ b/sys/netpfil/ipfw/ip_fw.h
-@@ -311,6 +311,7 @@ enum ipfw_opcodes {		/* arguments (4 byte each)		*/
- 	O_SETMARK,		/* mark packet with 32-bit value  */
- 	O_SKIPACTION,		/* skip to the next "keep-state action" */
- 	O_UDP_EIM,		/* UDP encap/decap for IPv6 migration */
-+	O_ADDTABLE,		/* add src/dst IP to table: arg1=tblno  */
- 	O_LAST_OPCODE		/* first invalid opcode number		*/
+ADDTABLE_F_DST is defined here so it is visible to userspace without
+requiring the kernel-private header.
+--- a/sys/netinet/ip_fw.h	2026-04-10 14:12:28.595287000 -0300
++++ b/sys/netinet/ip_fw.h	2026-04-10 14:14:46.254305000 -0300
+@@ -316,6 +316,8 @@
+ 
+ 	O_TABLE_LOOKUP = 99,	/* lookup: kidx=name, arg1=key	*/
+ 				/*	and flags, bitmask */
++
++	O_ADDTABLE,		/* add src/dst IP to table: arg1=tblno	*/
+ 
+ 	O_LAST_OPCODE		/* not an opcode!		*/
  };
-
-@@ -471,6 +472,19 @@ typedef struct _ipfw_insn_u32 {
- 	uint32_t	d[1];		/* one or more */
+@@ -393,6 +395,20 @@
+ 	ipfw_insn o;
+ 	u_int32_t d[1];	/* one or more */
  } ipfw_insn_u32;
-
++
 +/*
 + * Instruction layout for O_ADDTABLE.
 + *
@@ -37,7 +34,6 @@ visible to userspace without requiring the kernel-private header.
 +	uint8_t		flags;
 +	uint8_t		_pad[3];
 +} ipfw_insn_addtable;
-+
- typedef struct _ipfw_insn_ip {
- 	ipfw_insn	o;
- 	struct in_addr	addr;
+ 
+ typedef struct _ipfw_insn_kidx {
+ 	ipfw_insn o;

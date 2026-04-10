@@ -26,10 +26,9 @@ NEW_KERNEL_FILES = \
 PATCHES = \
 	patches/0001-ip_fw.h-add-O_ADDTABLE.patch \
 	patches/0002-ip_fw2.c-handle-O_ADDTABLE.patch \
-	patches/0003-ip_fw_main.c-init-destroy.patch \
-	patches/0004-kernel-Makefile.patch \
-	patches/0005-ipfw2.h-add-TOK_ADDTABLE.patch \
-	patches/0006-ipfw2.c-userspace-parser.patch
+	patches/0003-kernel-Makefile.patch \
+	patches/0004-ipfw2.h-add-TOK_ADDTABLE.patch \
+	patches/0005-ipfw2.c-userspace-parser.patch
 
 # -------------------------------------------------------------------------
 # Targets

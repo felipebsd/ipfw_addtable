@@ -1,42 +1,65 @@
-Handle O_ADDTABLE in the ipfw_chk() action switch (sys/netpfil/ipfw/ip_fw2.c).
+Handle O_ADDTABLE in ipfw_chk() and wire init/destroy lifecycle in ip_fw2.c.
 
-The action is non-terminal (like O_COUNT): it enqueues the address
-addition asynchronously and then allows rule evaluation to continue
-to the next rule.  IPFW_INC_RULE_COUNTER is called so hit counts and
-byte counts are updated correctly.
+The action is non-terminal (like O_COUNT): enqueues the address addition
+asynchronously then continues rule evaluation. IPFW_INC_RULE_COUNTER is
+called so hit/byte counts are updated correctly.
 
---- a/sys/netpfil/ipfw/ip_fw2.c
-+++ b/sys/netpfil/ipfw/ip_fw2.c
-@@ -71,6 +71,7 @@
- #include "ip_fw_private.h"
- #include "ip_fw_table.h"
- #include "ip_fw_nptv6.h"
+ipfw_addtable_init() is called after ipfw_init_tables() so the table
+subsystem is ready. ipfw_addtable_destroy() is called before
+ipfw_destroy_tables() to drain in-flight tasks first.
+--- a/sys/netpfil/ipfw/ip_fw2.c	2026-04-10 14:12:28.596879000 -0300
++++ b/sys/netpfil/ipfw/ip_fw2.c	2026-04-10 14:15:19.467421000 -0300
+@@ -101,6 +101,7 @@
+ #include <net/if_gre.h> /* for struct grehdr */
+ 
+ #include <netpfil/ipfw/ip_fw_private.h>
 +#include "ip_fw_addtable.h"
-
- #ifdef MAC
- #include <security/mac/mac_framework.h>
-
---- a/sys/netpfil/ipfw/ip_fw2.c
-+++ b/sys/netpfil/ipfw/ip_fw2.c
-@@ action switch inside ipfw_chk() @@
- 		case O_COUNT:
- 			IPFW_INC_RULE_COUNTER(f, pktlen);
- 			l = 0;		/* exit action loop */
- 			break;		/* non-terminal: continue outer rule loop */
-
-+		case O_ADDTABLE: {
-+			/*
-+			 * Non-terminal action: enqueue an async task to add
-+			 * the src or dst IP to the specified table, then
-+			 * continue processing subsequent rules.
-+			 */
-+			ipfw_insn_addtable *at = (ipfw_insn_addtable *)cmd;
+ 
+ #include <machine/in_cksum.h>	/* XXX for in_cksum */
+ 
+@@ -3072,7 +3073,24 @@
+ 				IPFW_INC_RULE_COUNTER(f, pktlen);
+ 				l = 0;		/* exit inner loop */
+ 				break;
 +
-+			(void)ipfw_addtable_enqueue(chain, at->o.arg1,
-+			    &args->f_id, at->flags);
-+			IPFW_INC_RULE_COUNTER(f, pktlen);
-+			l = 0;
-+			break;
-+		}
++			case O_ADDTABLE: {
++				/*
++				 * Non-terminal action: enqueue an async task
++				 * to add the src or dst IP to the specified
++				 * table, then continue processing subsequent
++				 * rules.
++				 */
++				const ipfw_insn_addtable *at;
+ 
++				at = insntoc(cmd, addtable);
++				(void)ipfw_addtable_enqueue(chain, at->o.arg1,
++				    &args->f_id, at->flags);
++				IPFW_INC_RULE_COUNTER(f, pktlen);
++				l = 0;
++				break;
++			}
 +
- 		case O_ACCEPT:
+ 			case O_SKIPTO:
+ 			    IPFW_INC_RULE_COUNTER(f, pktlen);
+ 			    f_pos = jump(chain, f,
+@@ -3727,6 +3745,12 @@
+ 		free(chain->map, M_IPFW);
+ 		free(rule, M_IPFW);
+ 		return (ENOSPC);
++	}
++	error = ipfw_addtable_init(chain);
++	if (error) {
++		ipfw_destroy_tables(chain, first);
++		free(chain->map, M_IPFW);
++		return (error);
+ 	}
+ 
+ 	IPFW_LOCK_INIT(chain);
+@@ -3802,6 +3826,7 @@
+ 	ipfw_destroy_skipto_cache(chain);
+ 	IPFW_WUNLOCK(chain);
+ 	IPFW_UH_WUNLOCK(chain);
++	ipfw_addtable_destroy(chain);
+ 	ipfw_destroy_tables(chain, last);
+ 	ipfw_eaction_uninit(chain, last);
+ 	if (reap != NULL)
