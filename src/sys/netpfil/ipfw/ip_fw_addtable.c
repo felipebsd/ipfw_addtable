@@ -121,6 +121,7 @@ struct addtable_entry {
 	uint16_t		 tbl;	  /* target table index */
 	uint8_t			 af;	  /* AF_INET or AF_INET6 */
 	uint8_t			 _pad;
+	uint32_t		 ts;	  /* Unix timestamp captured at enqueue */
 	union {
 		struct in_addr	 addr4;
 		struct in6_addr	 addr6;
@@ -170,11 +171,15 @@ addtable_task_fn(void *context, int pending __unused)
 	tei.masklen = (e->af == AF_INET6) ? 128 : 32;
 
 	/*
-	 * pvalue must point to a valid table_value; a zeroed struct
-	 * gives a default value of 0 for all fields, which is correct
-	 * for a plain presence-check table (no associated rule action).
+	 * Store the insertion timestamp in the tag field so that
+	 * "ipfw table N list" displays the Unix epoch at which the
+	 * address was first added.  Equivalent to:
+	 *   ipfw table N add <addr> $(date +%s)
+	 * EEXIST is treated as success (entry not updated), preserving
+	 * the original timestamp of the first insertion.
 	 */
 	memset(&tval, 0, sizeof(tval));
+	tval.tag = e->ts;
 	tei.pvalue = &tval;
 
 	if (e->af == AF_INET6)
@@ -296,6 +301,7 @@ ipfw_addtable_enqueue(struct ip_fw_chain *ch, uint16_t tbl,
 	e->vnet  = curvnet;		/* capture VNET context for the worker */
 	e->zone  = V_addtable_zone;	/* capture zone pointer for correct free */
 	e->tbl   = tbl;
+	e->ts    = (uint32_t)time_second; /* Unix timestamp at match time */
 
 	if (fid->addr_type == 6) {
 		e->af = AF_INET6;

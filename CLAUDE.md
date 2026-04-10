@@ -85,7 +85,27 @@ Isso implica que:
 - No kernel (`ip_fw2.c`), o case `O_ADDTABLE` deve usar o padrão `l = 0; break` das ações não-terminais como `O_COUNT`, sem definir `retval` nem `done`.
 - O opcode deve estar na lista `action_opcodes[]` no userspace (`ipfw2.c`) apenas para fins de exibição (`ipfw show`).
 
-### 2. Validação de existência da table no momento da criação da regra
+### 2. Timestamp de inserção como valor da entrada na table
+
+Ao inserir um endereço na table, o kernel deve gravar o Unix timestamp (epoch,
+em segundos) do momento do match como **valor** da entrada. Isso permite que
+ferramentas de userspace calculem há quanto tempo um IP está na table.
+
+O campo utilizado é `table_value.tag` (`uint32_t`), que é o campo exibido por
+`ipfw table list` e aceito por `ipfw table add addr VALUE`. O valor é capturado
+via `time_second` no momento do enqueue (packet path), armazenado em
+`addtable_entry.ts`, e gravado em `tval.tag` pelo worker antes de chamar
+`add_table_entry()`.
+
+Exemplo equivalente em userspace:
+```sh
+ipfw table 100 add 127.0.0.2 $(date +%s)
+```
+
+Entradas já existentes na table **não** são atualizadas (EEXIST é ignorado),
+preservando o timestamp da primeira inserção.
+
+### 3. Validação de existência da table no momento da criação da regra
 
 Ao adicionar uma regra com `addtable <tblno>`, o kernel (ou o parser userspace) deve verificar se a table `<tblno>` **já existe**. Se a table não existir, o comando deve falhar com erro (ex: `ESRCH` / "Table not found") e a regra **não deve ser criada**.
 
