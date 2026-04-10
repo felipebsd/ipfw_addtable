@@ -1,0 +1,33 @@
+Add ipfw_addtable_init() / ipfw_addtable_destroy() calls to the ipfw
+module init and destroy paths in sys/netpfil/ipfw/ip_fw_main.c.
+
+ipfw_addtable_init() is called after ipfw_init_tables() so the table
+subsystem is ready.  ipfw_addtable_destroy() is called before
+ipfw_destroy_tables() to drain in-flight tasks before the tables
+disappear.
+
+--- a/sys/netpfil/ipfw/ip_fw_main.c
++++ b/sys/netpfil/ipfw/ip_fw_main.c
+@@ -60,6 +60,7 @@
+ #include "ip_fw_private.h"
+ #include "ip_fw_table.h"
+ #include "ip_fw_sockopt.h"
++#include "ip_fw_addtable.h"
+
+ static int
+ vnet_ipfw_init(const void *unused)
+@@ -1,6 +1,6 @@
+ 	/* ... existing init code ... */
+ 	error = ipfw_init_tables(chain, first);
+ 	if (error)
+ 		panic("ipfw_init_tables");
++	error = ipfw_addtable_init(chain);
++	if (error)
++		panic("ipfw_addtable_init: %d", error);
+ 	/* ... rest of init ... */
+
+--- a/sys/netpfil/ipfw/ip_fw_main.c
++++ b/sys/netpfil/ipfw/ip_fw_main.c
+@@ vnet_ipfw_uninit @@
++	ipfw_addtable_destroy(chain);
+ 	ipfw_destroy_tables(chain, last);

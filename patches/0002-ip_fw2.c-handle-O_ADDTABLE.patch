@@ -1,0 +1,42 @@
+Handle O_ADDTABLE in the ipfw_chk() action switch (sys/netpfil/ipfw/ip_fw2.c).
+
+The action is non-terminal (like O_COUNT): it enqueues the address
+addition asynchronously and then allows rule evaluation to continue
+to the next rule.  IPFW_INC_RULE_COUNTER is called so hit counts and
+byte counts are updated correctly.
+
+--- a/sys/netpfil/ipfw/ip_fw2.c
++++ b/sys/netpfil/ipfw/ip_fw2.c
+@@ -71,6 +71,7 @@
+ #include "ip_fw_private.h"
+ #include "ip_fw_table.h"
+ #include "ip_fw_nptv6.h"
++#include "ip_fw_addtable.h"
+
+ #ifdef MAC
+ #include <security/mac/mac_framework.h>
+
+--- a/sys/netpfil/ipfw/ip_fw2.c
++++ b/sys/netpfil/ipfw/ip_fw2.c
+@@ action switch inside ipfw_chk() @@
+ 		case O_COUNT:
+ 			IPFW_INC_RULE_COUNTER(f, pktlen);
+ 			l = 0;		/* exit action loop */
+ 			break;		/* non-terminal: continue outer rule loop */
+
++		case O_ADDTABLE: {
++			/*
++			 * Non-terminal action: enqueue an async task to add
++			 * the src or dst IP to the specified table, then
++			 * continue processing subsequent rules.
++			 */
++			ipfw_insn_addtable *at = (ipfw_insn_addtable *)cmd;
++
++			ipfw_addtable_enqueue(chain, at->o.arg1,
++			    &args->f_id, at->flags);
++			IPFW_INC_RULE_COUNTER(f, pktlen);
++			l = 0;
++			break;
++		}
++
+ 		case O_ACCEPT:

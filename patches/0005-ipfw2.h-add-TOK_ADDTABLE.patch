@@ -1,0 +1,14 @@
+Add TOK_ADDTABLE token to the userspace ipfw token list (sbin/ipfw/ipfw2.h).
+
+The token is appended to the action token group, after TOK_SETMARK /
+TOK_SKIPACTION / TOK_UDP_EIM, so it does not shift any existing values.
+
+--- a/sbin/ipfw/ipfw2.h
++++ b/sbin/ipfw/ipfw2.h
+@@ action token group @@
+ 	TOK_TCPSETMSS,
+ 	TOK_MARK,
+ 	TOK_SETMARK,
+ 	TOK_SKIPACTION,
+ 	TOK_UDP_EIM,
++	TOK_ADDTABLE,
