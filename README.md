@@ -3,8 +3,8 @@
 An out-of-tree patch for FreeBSD 15/stable that adds an **`addtable`** action
 to `ipfw(8)`.  When a packet matches a rule with this action, the packet's
 source or destination IP address is asynchronously inserted into the specified
-`ipfw` address table and the packet is passed (like `accept`).  No subsequent
-rules are evaluated, making `addtable` a *terminal* action.
+`ipfw` address table.  Rule processing then continues to the next rule, making
+`addtable` a *non-terminal* action (similar to `count`).
 
 ---
 
@@ -222,9 +222,9 @@ addtable <tblno> [src|dst]
 | `src` | Add the **source** address (default when omitted) |
 | `dst` | Add the **destination** address |
 
-The action is *terminal*: after the address is enqueued for insertion, the
-packet is passed and no subsequent rules are evaluated (return code
-`IP_FW_PASS`, same as `accept`).
+The action is *non-terminal*: after the address is enqueued for insertion,
+rule evaluation continues with the next rule in the set (same semantics as
+`count`).
 
 ### Create the target table first
 
@@ -252,16 +252,15 @@ ipfw add 200 addtable 11 dst tcp from me to any setup via em0 out
 
 ### Combine with other rules
 
-Because `addtable` is terminal (packet is passed immediately after the
-address is enqueued), place it *after* any deny rules that should fire
-first:
+Because `addtable` is non-terminal, it composes naturally with allow/deny
+rules below it:
 
 ```sh
-# 1. Block known bad sources first
-ipfw add 499 deny ip from table\(20\) to any
-
-# 2. Record the source of new TCP SYN packets to port 22 and pass them
+# 1. Populate the block-list from incoming connection attempts to port 22
 ipfw add 500 addtable 20 src tcp from any to me 22 setup in
+
+# 2. Block everything in that table for 24 h (managed by a cron/daemon)
+ipfw add 501 deny ip from table\(20\) to any
 
 # 3. Normal allow-all traffic otherwise
 ipfw add 65534 allow ip from any to any
@@ -334,7 +333,7 @@ ipfw add 9000 addtable 99 src ip from any to any
 ipfw show 9000
 # Expected: 09000 addtable 99 src ip from any to any
 
-# Generate traffic and inspect the table (action is terminal: packet passes)
+# Generate traffic and inspect the table
 ping -c 3 127.0.0.1
 ipfw table 99 list
 # Expect 127.0.0.1/32 to appear
@@ -346,9 +345,9 @@ ping -c 1 8.8.8.8
 ipfw table 98 list
 # Expect 8.8.8.8/32 to appear
 
-# Terminal action: a rule below addtable is NOT reached for matching packets
+# Non-terminal: a deny rule below addtable IS still evaluated
 ipfw add 9002 deny ip from any to any
-ping -c 1 127.0.0.1  # should still succeed (addtable passes, rule 9002 not seen)
+ping -c 1 127.0.0.1  # blocked by rule 9002 (addtable fires first, then deny)
 
 # Cleanup
 ipfw delete 9000 9001 9002

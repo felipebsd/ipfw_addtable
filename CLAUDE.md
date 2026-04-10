@@ -77,13 +77,13 @@ O código será desenvolvido como uma modificação/extensão do kernel do FreeB
 
 ## Decisões de Design (requisitos obrigatórios)
 
-### 1. Ação terminal — sem reprocessamento
+### 1. Ação não-terminal — continua o processamento
 
-`addtable` é uma **ação terminal**: após inserir o endereço na tabela, o processamento do pacote **termina** (não continua para regras posteriores). O comportamento esperado é equivalente ao de `accept` — o pacote é liberado após o match, e nenhuma regra subsequente é avaliada.
+`addtable` é uma **ação não-terminal**: após enfileirar a adição do endereço na tabela, o processamento do pacote **continua** normalmente para as regras seguintes. O comportamento é equivalente ao de `count` — o pacote não é aceito nem descartado pela action, apenas o endereço é registrado na tabela.
 
 Isso implica que:
-- No kernel (`ip_fw2.c`), o case `O_ADDTABLE` não deve usar o padrão `l = 0; break` de ações não-terminais como `O_COUNT`; deve retornar `IP_FW_PASS` (ou o código de ação terminal adequado) encerrando a avaliação de regras.
-- O opcode **não** deve ser incluído na lista `actions[]` de ações não-terminais no userspace (`ipfw2.c`).
+- No kernel (`ip_fw2.c`), o case `O_ADDTABLE` deve usar o padrão `l = 0; break` das ações não-terminais como `O_COUNT`, sem definir `retval` nem `done`.
+- O opcode deve estar na lista `action_opcodes[]` no userspace (`ipfw2.c`) apenas para fins de exibição (`ipfw show`).
 
 ### 2. Validação de existência da table no momento da criação da regra
 
