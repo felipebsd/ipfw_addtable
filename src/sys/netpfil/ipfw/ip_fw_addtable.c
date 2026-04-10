@@ -51,6 +51,13 @@
  * All mutable state (UMA zone, taskqueue, active flag) is per-VNET so that
  * destroying one VNET does not drain or free resources belonging to another.
  *
+ * The taskqueue worker thread runs without an inherent VNET context (it
+ * defaults to vnet0).  To access per-VNET state correctly, ipfw_addtable_enqueue()
+ * captures curvnet and V_addtable_zone at enqueue time (when the correct VNET
+ * context is active) and stores them in addtable_entry.  The worker then
+ * calls CURVNET_SET(e->vnet) before any operation that touches VNET state,
+ * including add_table_entry() and uma_zfree().
+ *
  * LOCKING / TEARDOWN RACE
  * -----------------------
  * V_addtable_active is an atomic flag: 1 while the subsystem is live, 0
@@ -92,14 +99,28 @@
 #include "ip_fw_addtable.h"
 
 /*
+ * Compile-time assertion: ipfw_insn_addtable must be exactly two 32-bit
+ * words so that F_INSN_SIZE() returns 2 and ipfw_chk() advances the
+ * instruction pointer by the correct amount.
+ */
+CTASSERT(sizeof(ipfw_insn_addtable) == 2 * sizeof(uint32_t));
+
+/*
  * Per-entry context passed to the taskqueue worker.
+ *
+ * vnet and zone are captured at enqueue time (when curvnet is correct)
+ * so that the worker can restore the right VNET context and free to the
+ * right UMA zone without relying on a per-thread curvnet that defaults
+ * to vnet0 in taskqueue threads.
  */
 struct addtable_entry {
 	struct task		 task;
 	struct ip_fw_chain	*chain;
+	struct vnet		*vnet;	  /* VNET that enqueued this entry */
+	uma_zone_t		 zone;	  /* per-VNET zone; cached at enqueue */
 	uint16_t		 tbl;	  /* target table index */
-	uint8_t			 flags;	  /* ADDTABLE_F_DST or 0 */
 	uint8_t			 af;	  /* AF_INET or AF_INET6 */
+	uint8_t			 _pad;
 	union {
 		struct in_addr	 addr4;
 		struct in6_addr	 addr6;
@@ -126,7 +147,10 @@ static int		 addtable_errcnt;
 
 /*
  * Worker function: runs in the per-VNET ipfw_addtable taskqueue thread.
- * Calls add_table_entry() with proper locking outside the packet path.
+ *
+ * CURVNET_SET() restores the originating VNET context so that:
+ *   - add_table_entry() operates on the correct per-VNET chain state.
+ *   - uma_zfree() returns the block to the zone that allocated it.
  */
 static void
 addtable_task_fn(void *context, int pending __unused)
@@ -150,17 +174,19 @@ addtable_task_fn(void *context, int pending __unused)
 		tei.paddr = &e->addr4;
 
 	/*
+	 * Restore the originating VNET before touching any VNET state.
 	 * add_table_entry() acquires IPFW_UW_WLOCK + IPFW_WLOCK internally.
 	 * EEXIST is benign: the address is already present in the table.
 	 */
+	CURVNET_SET(e->vnet);
 	error = add_table_entry(e->chain, &ti, &tei, 0, 1);
 	if (error != 0 && error != EEXIST) {
 		if (ppsratecheck(&addtable_errtv, &addtable_errcnt, 1))
 			printf("ipfw_addtable: error %d adding entry to "
 			    "table %u\n", error, (unsigned)e->tbl);
 	}
-
-	uma_zfree(V_addtable_zone, e);
+	uma_zfree(e->zone, e);
+	CURVNET_RESTORE();
 }
 
 /*
@@ -229,6 +255,9 @@ ipfw_addtable_destroy(struct ip_fw_chain *ch __unused)
  * ipfw_addtable_enqueue -- called from the packet processing path
  * (IPFW_PF_RLOCK held).  Never blocks.
  *
+ * curvnet and V_addtable_zone are captured here, while the correct VNET
+ * context is still active, and stored in the entry for use by the worker.
+ *
  * Returns ENXIO if the subsystem is shutting down, ENOMEM if the UMA
  * allocation fails.  In both cases the packet continues processing
  * normally; the table addition is simply skipped.
@@ -255,8 +284,9 @@ ipfw_addtable_enqueue(struct ip_fw_chain *ch, uint16_t tbl,
 		return (ENOMEM);
 
 	e->chain = ch;
+	e->vnet  = curvnet;		/* capture VNET context for the worker */
+	e->zone  = V_addtable_zone;	/* capture zone pointer for correct free */
 	e->tbl   = tbl;
-	e->flags = flags;
 
 	if (fid->addr_type == 6) {
 		e->af = AF_INET6;

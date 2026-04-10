@@ -38,10 +38,11 @@ Display example:
 +		av++; ac--;
 +
 +		at = (ipfw_insn_addtable *)cmd;
++		memset(at, 0, sizeof(*at));
 +		at->o.opcode = O_ADDTABLE;
 +		at->o.len    = F_INSN_SIZE(ipfw_insn_addtable);
 +		at->o.arg1   = (uint16_t)tbl;
-+		at->flags    = 0;	/* default: source address */
++		/* at->flags = 0: source address (default); _pad[3] zeroed above */
 +
 +		/* optional src|dst keyword */
 +		if (ac > 0 && strcasecmp(*av, "dst") == 0) {
