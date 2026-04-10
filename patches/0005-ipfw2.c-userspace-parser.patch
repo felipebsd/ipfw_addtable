@@ -61,10 +61,10 @@ Syntax:  ipfw add <num> addtable <tblno> [src|dst] <body>
 +		at->flags = 0;
 +
 +		/* optional src|dst keyword */
-+		if (ac > 0 && strcasecmp(*av, "dst") == 0) {
++		if (*av != NULL && strcasecmp(*av, "dst") == 0) {
 +			at->flags = ADDTABLE_F_DST;
 +			av++;
-+		} else if (ac > 0 && strcasecmp(*av, "src") == 0) {
++		} else if (*av != NULL && strcasecmp(*av, "src") == 0) {
 +			av++;	/* consume explicit "src", flag stays 0 */
 +		}
 +		break;

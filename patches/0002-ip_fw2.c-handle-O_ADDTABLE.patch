@@ -1,8 +1,9 @@
 Handle O_ADDTABLE in ipfw_chk() and wire init/destroy lifecycle in ip_fw2.c.
 
-The action is non-terminal (like O_COUNT): enqueues the address addition
-asynchronously then continues rule evaluation. IPFW_INC_RULE_COUNTER is
-called so hit/byte counts are updated correctly.
+The action is terminal (like O_ACCEPT): enqueues the address addition
+asynchronously, sets retval = IP_FW_PASS and done = 1 so no subsequent
+rules are evaluated. IPFW_INC_RULE_COUNTER is called so hit/byte counts
+are updated correctly.
 
 ipfw_addtable_init() is called after ipfw_init_tables() so the table
 subsystem is ready. ipfw_addtable_destroy() is called before
@@ -11,38 +12,40 @@ ipfw_destroy_tables() to drain in-flight tasks first.
 +++ b/sys/netpfil/ipfw/ip_fw2.c	2026-04-10 14:15:19.467421000 -0300
 @@ -101,6 +101,7 @@
  #include <net/if_gre.h> /* for struct grehdr */
- 
+
  #include <netpfil/ipfw/ip_fw_private.h>
 +#include "ip_fw_addtable.h"
- 
+
  #include <machine/in_cksum.h>	/* XXX for in_cksum */
- 
-@@ -3072,7 +3073,24 @@
- 				IPFW_INC_RULE_COUNTER(f, pktlen);
- 				l = 0;		/* exit inner loop */
- 				break;
+
+@@ -3072,7 +3073,26 @@
+ 			IPFW_INC_RULE_COUNTER(f, pktlen);
+ 			l = 0;		/* exit inner loop */
+ 			break;
 +
-+			case O_ADDTABLE: {
-+				/*
-+				 * Non-terminal action: enqueue an async task
-+				 * to add the src or dst IP to the specified
-+				 * table, then continue processing subsequent
-+				 * rules.
-+				 */
-+				const ipfw_insn_addtable *at;
- 
-+				at = insntoc(cmd, addtable);
-+				(void)ipfw_addtable_enqueue(chain, at->o.arg1,
-+				    &args->f_id, at->flags);
-+				IPFW_INC_RULE_COUNTER(f, pktlen);
-+				l = 0;
-+				break;
-+			}
++		case O_ADDTABLE: {
++			/*
++			 * Terminal action: enqueue an async task to
++			 * add the src or dst IP to the specified
++			 * table, then pass the packet (same as accept).
++			 * No subsequent rules are evaluated.
++			 */
++			const ipfw_insn_addtable *at;
+
++			at = insntoc(cmd, addtable);
++			(void)ipfw_addtable_enqueue(chain, at->o.arg1,
++			    &args->f_id, at->flags);
++			IPFW_INC_RULE_COUNTER(f, pktlen);
++			retval = IP_FW_PASS;
++			l = 0;
++			done = 1;
++			break;
++		}
 +
- 			case O_SKIPTO:
- 			    IPFW_INC_RULE_COUNTER(f, pktlen);
- 			    f_pos = jump(chain, f,
-@@ -3727,6 +3745,12 @@
+ 		case O_SKIPTO:
+ 		    IPFW_INC_RULE_COUNTER(f, pktlen);
+ 		    f_pos = jump(chain, f,
+@@ -3727,6 +3747,12 @@
  		free(chain->map, M_IPFW);
  		free(rule, M_IPFW);
  		return (ENOSPC);
@@ -53,7 +56,7 @@ ipfw_destroy_tables() to drain in-flight tasks first.
 +		free(chain->map, M_IPFW);
 +		return (error);
  	}
- 
+
  	IPFW_LOCK_INIT(chain);
 @@ -3802,6 +3826,7 @@
  	ipfw_destroy_skipto_cache(chain);

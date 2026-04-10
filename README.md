@@ -3,8 +3,8 @@
 An out-of-tree patch for FreeBSD 15/stable that adds an **`addtable`** action
 to `ipfw(8)`.  When a packet matches a rule with this action, the packet's
 source or destination IP address is asynchronously inserted into the specified
-`ipfw` address table.  Rule processing then continues to the next rule, making
-`addtable` a *non-terminal* action (similar to `count`).
+`ipfw` address table and the packet is passed (like `accept`).  No subsequent
+rules are evaluated, making `addtable` a *terminal* action.
 
 ---
 
@@ -116,7 +116,8 @@ ipfw_addtable/
 │   ├── 0002-ip_fw2.c-handle-O_ADDTABLE.patch       Kernel action handler + lifecycle
 │   ├── 0003-kernel-Makefile.patch                  Build system
 │   ├── 0004-ipfw2.h-add-TOK_ADDTABLE.patch         Userspace token
-│   └── 0005-ipfw2.c-userspace-parser.patch         CLI parser + printer
+│   ├── 0005-ipfw2.c-userspace-parser.patch         CLI parser + printer
+│   └── 0006-ip_fw_sockopt.c-validate-O_ADDTABLE.patch  Opcode validation + table existence check
 └── src/
     └── sys/netpfil/ipfw/
         ├── ip_fw_addtable.h           Kernel-internal API
@@ -154,7 +155,7 @@ make SRCDIR=/usr/src apply
 ```
 
 This copies `ip_fw_addtable.{h,c}` into `${SRCDIR}/sys/netpfil/ipfw/` and
-applies all five patches with `patch(1)`.  Patches are idempotent; re-running
+applies all six patches with `patch(1)`.  Patches are idempotent; re-running
 `apply` on an already-patched tree will print a harmless "already applied"
 message.
 
@@ -221,13 +222,14 @@ addtable <tblno> [src|dst]
 | `src` | Add the **source** address (default when omitted) |
 | `dst` | Add the **destination** address |
 
-The action is *non-terminal*: after the address is enqueued for insertion,
-rule evaluation continues with the next rule in the set (the return code seen
-by `ipfw_chk()` is `IP_FW_PASS`).
+The action is *terminal*: after the address is enqueued for insertion, the
+packet is passed and no subsequent rules are evaluated (return code
+`IP_FW_PASS`, same as `accept`).
 
 ### Create the target table first
 
-Tables must exist before a rule can reference them:
+Tables **must exist** before a rule can reference them.  Attempting to add
+a rule whose table number does not exist will fail with `ESRCH`:
 
 ```sh
 ipfw table 10 create type addr
@@ -250,15 +252,16 @@ ipfw add 200 addtable 11 dst tcp from me to any setup via em0 out
 
 ### Combine with other rules
 
-Because `addtable` is non-terminal, it composes naturally with allow/deny
-rules below it:
+Because `addtable` is terminal (packet is passed immediately after the
+address is enqueued), place it *after* any deny rules that should fire
+first:
 
 ```sh
-# 1. Populate the block-list from incoming connection attempts to port 22
-ipfw add 500 addtable 20 src tcp from any to me 22 setup in
+# 1. Block known bad sources first
+ipfw add 499 deny ip from table\(20\) to any
 
-# 2. Block everything in that table for 24 h (managed by a cron/daemon)
-ipfw add 501 deny ip from table\(20\) to any
+# 2. Record the source of new TCP SYN packets to port 22 and pass them
+ipfw add 500 addtable 20 src tcp from any to me 22 setup in
 
 # 3. Normal allow-all traffic otherwise
 ipfw add 65534 allow ip from any to any
@@ -302,8 +305,9 @@ respectively.
   theoretical residual case.
 
 * **Table must already exist** — the kernel does not create the target table
-  automatically.  Referencing a non-existent table returns an error from
-  `add_table_entry()`, which is logged (rate-limited) via `printf(9)`.
+  automatically.  Attempting to add a rule whose table does not exist is
+  rejected at rule-creation time with `ESRCH` ("No such process" / table not
+  found).  Create the table first with `ipfw table <n> create type addr`.
 
 * **No duplicate suppression in the fast path** — `EEXIST` from
   `add_table_entry()` is treated as success and not logged.  Inserting an
@@ -320,26 +324,34 @@ respectively.
 There is no automated test suite yet.  Suggested manual checks:
 
 ```sh
-# Verify the rule parses and shows correctly
-ipfw table 99 create type addr
-ipfw add 9000 addtable 99 src from any to any
-ipfw show 9000
-# Expected: 09000 addtable 99 src from any to any
+# Table-existence guard: rule creation must fail before the table exists
+ipfw add 9000 addtable 99 src ip from any to any
+# Expected: error — table 99 not found (ESRCH)
 
-# Generate traffic and inspect the table
+# Verify the rule parses and shows correctly once the table exists
+ipfw table 99 create type addr
+ipfw add 9000 addtable 99 src ip from any to any
+ipfw show 9000
+# Expected: 09000 addtable 99 src ip from any to any
+
+# Generate traffic and inspect the table (action is terminal: packet passes)
 ping -c 3 127.0.0.1
 ipfw table 99 list
 # Expect 127.0.0.1/32 to appear
 
 # Dst variant
 ipfw table 98 create type addr
-ipfw add 9001 addtable 98 dst from any to any
+ipfw add 9001 addtable 98 dst ip from any to any
 ping -c 1 8.8.8.8
 ipfw table 98 list
 # Expect 8.8.8.8/32 to appear
 
+# Terminal action: a rule below addtable is NOT reached for matching packets
+ipfw add 9002 deny ip from any to any
+ping -c 1 127.0.0.1  # should still succeed (addtable passes, rule 9002 not seen)
+
 # Cleanup
-ipfw delete 9000 9001
+ipfw delete 9000 9001 9002
 ipfw table 99 destroy
 ipfw table 98 destroy
 ```

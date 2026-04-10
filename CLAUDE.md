@@ -75,6 +75,28 @@ O código será desenvolvido como uma modificação/extensão do kernel do FreeB
 
 ---
 
+## Decisões de Design (requisitos obrigatórios)
+
+### 1. Ação terminal — sem reprocessamento
+
+`addtable` é uma **ação terminal**: após inserir o endereço na tabela, o processamento do pacote **termina** (não continua para regras posteriores). O comportamento esperado é equivalente ao de `accept` — o pacote é liberado após o match, e nenhuma regra subsequente é avaliada.
+
+Isso implica que:
+- No kernel (`ip_fw2.c`), o case `O_ADDTABLE` não deve usar o padrão `l = 0; break` de ações não-terminais como `O_COUNT`; deve retornar `IP_FW_PASS` (ou o código de ação terminal adequado) encerrando a avaliação de regras.
+- O opcode **não** deve ser incluído na lista `actions[]` de ações não-terminais no userspace (`ipfw2.c`).
+
+### 2. Validação de existência da table no momento da criação da regra
+
+Ao adicionar uma regra com `addtable <tblno>`, o kernel (ou o parser userspace) deve verificar se a table `<tblno>` **já existe**. Se a table não existir, o comando deve falhar com erro (ex: `ESRCH` / "Table not found") e a regra **não deve ser criada**.
+
+Isso garante que:
+- Não haja regras "orphan" referenciando tables inexistentes.
+- O comportamento é consistente com outros opcodes que referenciam objetos nomeados do ipfw (tables de lookup, NAT instances, etc.), os quais também exigem que o objeto exista antes da criação da regra.
+
+**Implementação sugerida:** validar no handler do `TOK_ADDTABLE` no userspace (via `getsockopt`/`setsockopt` para checar existência da table antes de submeter a regra), ou no `ipfw_check_opcode()` do kernel durante a validação de `O_ADDTABLE`.
+
+---
+
 ## Referências
 
 - [ipfw(8) man page](https://man.freebsd.org/cgi/man.cgi?ipfw)

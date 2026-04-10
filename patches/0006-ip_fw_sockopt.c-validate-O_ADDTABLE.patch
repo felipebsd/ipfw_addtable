@@ -1,0 +1,68 @@
+Validate O_ADDTABLE opcode size and table existence in ip_fw_sockopt.c.
+
+Two changes:
+1. ipfw_check_opcode(): accept O_ADDTABLE as a valid action opcode and
+   verify its instruction size matches ipfw_insn_addtable.  Without this
+   case the kernel rejects any rule containing O_ADDTABLE with EINVAL.
+
+2. ipfw_commit_rules(): scan every submitted rule for O_ADDTABLE actions
+   and verify the referenced table exists before committing.  If the table
+   is absent the call returns ESRCH so the operator can create the table
+   first (consistent with how other object-referencing opcodes behave).
+--- a/sys/netpfil/ipfw/ip_fw_sockopt.c	2026-04-10 14:12:28.000000000 -0300
++++ b/sys/netpfil/ipfw/ip_fw_sockopt.c	2026-04-10 14:20:00.000000000 -0300
+@@ -452,10 +452,42 @@ ipfw_commit_rules(struct ip_fw_chain *chain, struct rule_check_info *rci,
+     int count)
+ {
+ 	int error, i, insert_before, tcount, rule_idx, last_rule_idx;
++	int l, cmdlen;
+ 	uint32_t rulenum;
+ 	struct rule_check_info *ci;
+ 	struct ip_fw *krule;
+ 	struct ip_fw **map;	/* the new array of pointers */
++	ipfw_insn *cmd;
++	struct namedobj_instance *ni;
++	char bname[16];
++
++	/*
++	 * Verify that every O_ADDTABLE action in the submitted rules
++	 * references an existing table.  Rules referencing a non-existent
++	 * table are rejected with ESRCH so the caller can create the table
++	 * first (consistent with the behaviour of other object-referencing
++	 * opcodes).
++	 */
++	ni = ipfw_get_table_objhash(chain);
++	IPFW_UH_RLOCK(chain);
++	for (ci = rci, i = 0; i < count; ci++, i++) {
++		krule = ci->krule;
++		cmd = ACTION_PTR(krule);
++		l = krule->cmd_len - krule->act_ofs;
++		for (; l > 0; l -= cmdlen, cmd += cmdlen) {
++			cmdlen = F_LEN(cmd);
++			if (cmd->opcode == O_ADDTABLE) {
++				snprintf(bname, sizeof(bname), "%d",
++				    cmd->arg1);
++				if (ipfw_objhash_lookup_name(ni, 0,
++				    bname) == NULL) {
++					IPFW_UH_RUNLOCK(chain);
++					return (ESRCH);
++				}
++			}
++		}
++	}
++	IPFW_UH_RUNLOCK(chain);
+
+ 	/* Check if we need to do table/obj index remap */
+ 	tcount = 0;
+@@ -1619,6 +1651,11 @@ ipfw_check_opcode(ipfw_insn **pcmd, int *plen, struct rule_check_info *ci)
+ 		ci->object_opcodes++;
+ 		return (CHECK_ACTION);
+
++	case O_ADDTABLE:
++		if (cmdlen != F_INSN_SIZE(ipfw_insn_addtable))
++			return (BAD_SIZE);
++		return (CHECK_ACTION);
++
+ 	case O_FORWARD_MAC: /* XXX not implemented yet */
+ 	case O_COUNT:
+ 	case O_ACCEPT:

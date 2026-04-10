@@ -91,8 +91,8 @@
 #include <net/vnet.h>
 
 #include <netinet/in.h>
+#include <netinet/ip_var.h>	/* struct ipfw_rule_ref */
 #include <netinet/ip_fw.h>
-#include <netinet6/in6.h>
 
 #include "ip_fw_private.h"
 #include "ip_fw_table.h"
@@ -158,6 +158,7 @@ addtable_task_fn(void *context, int pending __unused)
 	struct addtable_entry	*e = context;
 	struct tid_info		 ti;
 	struct tentry_info	 tei;
+	struct table_value	 tval;
 	int			 error;
 
 	memset(&ti, 0, sizeof(ti));
@@ -167,6 +168,14 @@ addtable_task_fn(void *context, int pending __unused)
 	memset(&tei, 0, sizeof(tei));
 	tei.subtype = e->af;
 	tei.masklen = (e->af == AF_INET6) ? 128 : 32;
+
+	/*
+	 * pvalue must point to a valid table_value; a zeroed struct
+	 * gives a default value of 0 for all fields, which is correct
+	 * for a plain presence-check table (no associated rule action).
+	 */
+	memset(&tval, 0, sizeof(tval));
+	tei.pvalue = &tval;
 
 	if (e->af == AF_INET6)
 		tei.paddr = &e->addr6;
@@ -213,7 +222,7 @@ ipfw_addtable_init(struct ip_fw_chain *ch __unused)
 	}
 
 	error = taskqueue_start_threads(&V_addtable_tq, 1, PI_NET,
-	    "ipfw_addtable vnet%u", curvnet->vnet_idx);
+	    "ipfw_addtable");
 	if (error != 0) {
 		taskqueue_free(V_addtable_tq);
 		V_addtable_tq = NULL;
