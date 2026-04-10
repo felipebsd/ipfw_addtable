@@ -45,6 +45,26 @@
  *
  * The action is non-terminal: after enqueueing, rule processing continues
  * to the next rule (same semantics as "count").
+ *
+ * VNET
+ * ----
+ * All mutable state (UMA zone, taskqueue, active flag) is per-VNET so that
+ * destroying one VNET does not drain or free resources belonging to another.
+ *
+ * LOCKING / TEARDOWN RACE
+ * -----------------------
+ * V_addtable_active is an atomic flag: 1 while the subsystem is live, 0
+ * once ipfw_addtable_destroy() has been entered.  ipfw_addtable_enqueue()
+ * checks this flag and returns ENXIO early if teardown has begun.
+ *
+ * There is an inherent residual race: a thread that passes the flag check
+ * could be preempted before it calls taskqueue_enqueue(), then teardown
+ * completes and frees the taskqueue.  The primary protection against this
+ * is the ipfw module-unload contract: all O_ADDTABLE rules must be deleted
+ * before the module can unload, ensuring no new packets can reach the
+ * O_ADDTABLE action once destroy is in progress.  The atomic flag is a
+ * belt-and-suspenders guard for any in-flight packets still past the rule
+ * check at that instant.
  */
 
 #include <sys/cdefs.h>
@@ -53,11 +73,15 @@
 #include <sys/kernel.h>
 #include <sys/malloc.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <sys/taskqueue.h>
 #include <vm/uma.h>
 
+#include <machine/atomic.h>
+
 #include <net/if.h>
 #include <net/if_var.h>
+#include <net/vnet.h>
 
 #include <netinet/in.h>
 #include <netinet/ip_fw.h>
@@ -82,11 +106,26 @@ struct addtable_entry {
 	};
 };
 
-static uma_zone_t		 addtable_zone;
-static struct taskqueue		*addtable_tq;
+/*
+ * All mutable state is per-VNET.
+ */
+VNET_DEFINE_STATIC(uma_zone_t,		 addtable_zone);
+VNET_DEFINE_STATIC(struct taskqueue *,	 addtable_tq);
+VNET_DEFINE_STATIC(u_int,		 addtable_active);
+
+#define	V_addtable_zone		VNET(addtable_zone)
+#define	V_addtable_tq		VNET(addtable_tq)
+#define	V_addtable_active	VNET(addtable_active)
 
 /*
- * Worker function: runs in the ipfw_addtable taskqueue thread.
+ * Global rate-limit state for error logging (not VNET-specific; used only
+ * to suppress log flooding, correctness does not depend on per-VNET values).
+ */
+static struct timeval	 addtable_errtv;
+static int		 addtable_errcnt;
+
+/*
+ * Worker function: runs in the per-VNET ipfw_addtable taskqueue thread.
  * Calls add_table_entry() with proper locking outside the packet path.
  */
 static void
@@ -115,60 +154,84 @@ addtable_task_fn(void *context, int pending __unused)
 	 * EEXIST is benign: the address is already present in the table.
 	 */
 	error = add_table_entry(e->chain, &ti, &tei, 0, 1);
-	if (error != 0 && error != EEXIST)
-		printf("ipfw_addtable: error %d adding entry to table %u\n",
-		    error, (unsigned)e->tbl);
+	if (error != 0 && error != EEXIST) {
+		if (ppsratecheck(&addtable_errtv, &addtable_errcnt, 1))
+			printf("ipfw_addtable: error %d adding entry to "
+			    "table %u\n", error, (unsigned)e->tbl);
+	}
 
-	uma_zfree(addtable_zone, e);
+	uma_zfree(V_addtable_zone, e);
 }
 
 /*
- * ipfw_addtable_init -- called once during ipfw module initialisation.
+ * ipfw_addtable_init -- called once per VNET during ipfw module init.
  */
 int
 ipfw_addtable_init(struct ip_fw_chain *ch __unused)
 {
-	addtable_zone = uma_zcreate("ipfw_addtable",
+	int error;
+
+	V_addtable_zone = uma_zcreate("ipfw_addtable",
 	    sizeof(struct addtable_entry),
 	    NULL, NULL, NULL, NULL,
 	    UMA_ALIGN_PTR, 0);
-	if (addtable_zone == NULL)
+	if (V_addtable_zone == NULL)
 		return (ENOMEM);
 
-	addtable_tq = taskqueue_create("ipfw_addtable", M_WAITOK,
-	    taskqueue_thread_enqueue, &addtable_tq);
-	if (addtable_tq == NULL) {
-		uma_zdestroy(addtable_zone);
-		addtable_zone = NULL;
+	V_addtable_tq = taskqueue_create("ipfw_addtable", M_WAITOK,
+	    taskqueue_thread_enqueue, &V_addtable_tq);
+	if (V_addtable_tq == NULL) {
+		uma_zdestroy(V_addtable_zone);
+		V_addtable_zone = NULL;
 		return (ENOMEM);
 	}
 
-	taskqueue_start_threads(&addtable_tq, 1, PI_NET, "ipfw_addtable");
+	error = taskqueue_start_threads(&V_addtable_tq, 1, PI_NET,
+	    "ipfw_addtable");
+	if (error != 0) {
+		taskqueue_free(V_addtable_tq);
+		V_addtable_tq = NULL;
+		uma_zdestroy(V_addtable_zone);
+		V_addtable_zone = NULL;
+		return (error);
+	}
+
+	/* Mark subsystem live only after all resources are ready. */
+	atomic_store_rel_int(&V_addtable_active, 1);
 
 	return (0);
 }
 
 /*
- * ipfw_addtable_destroy -- called during ipfw module unload.
+ * ipfw_addtable_destroy -- called once per VNET during ipfw module unload.
  */
 void
 ipfw_addtable_destroy(struct ip_fw_chain *ch __unused)
 {
-	if (addtable_tq != NULL) {
-		taskqueue_drain_all(addtable_tq);
-		taskqueue_free(addtable_tq);
-		addtable_tq = NULL;
+	/*
+	 * Signal teardown first so that any racing ipfw_addtable_enqueue()
+	 * calls return ENXIO instead of touching the taskqueue.
+	 */
+	atomic_store_rel_int(&V_addtable_active, 0);
+
+	if (V_addtable_tq != NULL) {
+		taskqueue_drain_all(V_addtable_tq);
+		taskqueue_free(V_addtable_tq);
+		V_addtable_tq = NULL;
 	}
-	if (addtable_zone != NULL) {
-		uma_zdestroy(addtable_zone);
-		addtable_zone = NULL;
+	if (V_addtable_zone != NULL) {
+		uma_zdestroy(V_addtable_zone);
+		V_addtable_zone = NULL;
 	}
 }
 
 /*
  * ipfw_addtable_enqueue -- called from the packet processing path
- * (IPFW_PF_RLOCK held).  Never blocks.  Returns ENOMEM if the UMA
- * allocation fails; the packet continues processing regardless.
+ * (IPFW_PF_RLOCK held).  Never blocks.
+ *
+ * Returns ENXIO if the subsystem is shutting down, ENOMEM if the UMA
+ * allocation fails.  In both cases the packet continues processing
+ * normally; the table addition is simply skipped.
  */
 int
 ipfw_addtable_enqueue(struct ip_fw_chain *ch, uint16_t tbl,
@@ -176,7 +239,18 @@ ipfw_addtable_enqueue(struct ip_fw_chain *ch, uint16_t tbl,
 {
 	struct addtable_entry	*e;
 
-	e = uma_zalloc(addtable_zone, M_NOWAIT);
+	/*
+	 * Check the active flag before touching the taskqueue.  This is the
+	 * primary guard against enqueueing onto a destroyed or NULL taskqueue
+	 * during module teardown (see "LOCKING / TEARDOWN RACE" above).
+	 */
+	if (atomic_load_acq_int(&V_addtable_active) == 0)
+		return (ENXIO);
+
+	if (V_addtable_tq == NULL)
+		return (ENXIO);
+
+	e = uma_zalloc(V_addtable_zone, M_NOWAIT);
 	if (e == NULL)
 		return (ENOMEM);
 
@@ -202,7 +276,7 @@ ipfw_addtable_enqueue(struct ip_fw_chain *ch, uint16_t tbl,
 	}
 
 	TASK_INIT(&e->task, 0, addtable_task_fn, e);
-	taskqueue_enqueue(addtable_tq, &e->task);
+	taskqueue_enqueue(V_addtable_tq, &e->task);
 
 	return (0);
 }

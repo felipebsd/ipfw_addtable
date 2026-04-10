@@ -7,14 +7,11 @@ The instruction struct carries the table number in o.arg1 and a flags
 byte indicating whether the source (default) or destination address
 should be added to the table.
 
+ADDTABLE_F_DST is defined here (not in ip_fw_addtable.h) so that it is
+visible to userspace without requiring the kernel-private header.
+
 --- a/sys/netpfil/ipfw/ip_fw.h
 +++ b/sys/netpfil/ipfw/ip_fw.h
-@@ -1,4 +1,4 @@
--/* $FreeBSD$ */
-+/* $FreeBSD$ */ /* modified for ipfw_addtable */
- /*-
-  * SPDX-License-Identifier: BSD-2-Clause
-  *
 @@ -311,6 +311,7 @@ enum ipfw_opcodes {		/* arguments (4 byte each)		*/
  	O_SETMARK,		/* mark packet with 32-bit value  */
  	O_SKIPACTION,		/* skip to the next "keep-state action" */

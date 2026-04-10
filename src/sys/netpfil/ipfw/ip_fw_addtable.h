@@ -30,10 +30,10 @@
 #define	_IP_FW_ADDTABLE_H_
 
 /*
- * Flag for the O_ADDTABLE action instruction.
- * Stored in ipfw_insn_addtable.flags.
+ * ADDTABLE_F_DST is intentionally defined only in ip_fw.h (via the
+ * 0001 patch) so that it is visible to both kernel and userspace without
+ * requiring this kernel-only header.  Do NOT redefine it here.
  */
-#define	ADDTABLE_F_DST	0x01	/* add destination IP (default is source IP) */
 
 #ifdef _KERNEL
 int	 ipfw_addtable_init(struct ip_fw_chain *ch);

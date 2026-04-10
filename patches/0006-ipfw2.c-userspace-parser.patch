@@ -30,8 +30,9 @@ Display example:
 +		char *end;
 +
 +		NEED1("addtable needs a table number");
++		errno = 0;
 +		tbl = strtol(*av, &end, 10);
-+		if (*end != '\0' || tbl < 0 || tbl > 65535)
++		if (errno == ERANGE || *end != '\0' || tbl < 0 || tbl > 65535)
 +			errx(EX_USAGE,
 +			    "addtable: table number must be 0-65535");
 +		av++; ac--;
