@@ -213,7 +213,7 @@ ipfw_addtable_init(struct ip_fw_chain *ch __unused)
 	}
 
 	error = taskqueue_start_threads(&V_addtable_tq, 1, PI_NET,
-	    "ipfw_addtable");
+	    "ipfw_addtable vnet%u", curvnet->vnet_idx);
 	if (error != 0) {
 		taskqueue_free(V_addtable_tq);
 		V_addtable_tq = NULL;

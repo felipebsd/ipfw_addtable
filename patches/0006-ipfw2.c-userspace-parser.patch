@@ -62,6 +62,10 @@ Display example:
 +	case O_ADDTABLE: {
 +		ipfw_insn_addtable *at = (ipfw_insn_addtable *)cmd;
 +
++		/*
++		 * Only bit 0 (ADDTABLE_F_DST) is defined. If future
++		 * versions add flags, extend this switch accordingly.
++		 */
 +		bprintf(bp, " addtable %u %s",
 +		    (unsigned)at->o.arg1,
 +		    (at->flags & ADDTABLE_F_DST) ? "dst" : "src");

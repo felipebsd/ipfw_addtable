@@ -32,7 +32,7 @@ byte counts are updated correctly.
 +			 */
 +			ipfw_insn_addtable *at = (ipfw_insn_addtable *)cmd;
 +
-+			ipfw_addtable_enqueue(chain, at->o.arg1,
++			(void)ipfw_addtable_enqueue(chain, at->o.arg1,
 +			    &args->f_id, at->flags);
 +			IPFW_INC_RULE_COUNTER(f, pktlen);
 +			l = 0;
