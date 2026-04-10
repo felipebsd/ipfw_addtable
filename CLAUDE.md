@@ -97,6 +97,61 @@ Isso garante que:
 
 ---
 
+## Checklist de Testes
+
+Executar sempre que o usuário pedir explicitamente para testar. Usar o
+binário compilado em `/usr/src/sbin/ipfw/ipfw` e o módulo em
+`/usr/obj/usr/src/amd64.amd64/sys/modules/ipfw/ipfw.ko`.
+
+```sh
+IPFW=/usr/src/sbin/ipfw/ipfw
+KO=/usr/obj/usr/src/amd64.amd64/sys/modules/ipfw/ipfw.ko
+
+# 1. Carregar o módulo
+kldload $KO && kldstat | grep ipfw
+
+# 2. Rejeição com table inexistente (deve falhar com ESRCH / "No such process")
+$IPFW add 9000 addtable 99 src ip from any to any 2>&1
+
+# 3. Criar tables e adicionar rules
+$IPFW table 99 create type addr
+$IPFW table 98 create type addr
+$IPFW add 9000 addtable 99 src ip  from any to any   # src IPv4
+$IPFW add 9001 addtable 99 dst ip  from any to any   # dst IPv4
+$IPFW add 9002 addtable 98 src ip6 from any to any   # src IPv6
+$IPFW add 9003 addtable 98 dst ip6 from any to any   # dst IPv6
+
+# 4. Exibição correta (ipfw show)
+$IPFW show 9000 9001 9002 9003
+
+# 5. Inserção de src IPv4
+ping -c 2 -q 127.0.0.1 > /dev/null && sleep 0.3
+$IPFW table 99 list   # deve conter 127.0.0.1/32
+
+# 6. Inserção de dst IPv4
+ping -c 2 -q 127.0.0.2 > /dev/null && sleep 0.3
+$IPFW table 99 list   # deve conter 127.0.0.2/32
+
+# 7. Inserção de src e dst IPv6
+ping6 -c 2 -q ::1 > /dev/null && sleep 0.3
+$IPFW table 98 list   # deve conter ::1/128
+
+# 8. Ação não-terminal: regra subsequente ainda é avaliada
+$IPFW add 9004 deny ip from 127.0.0.3 to any
+ping -c 1 -q 127.0.0.3 > /dev/null 2>&1
+echo "ping exit: $? (esperado != 0 — bloqueado pela rule 9004)"
+sleep 0.3
+$IPFW table 99 list | grep 127.0.0.3   # src deve ter sido inserido antes do deny
+
+# Cleanup
+$IPFW delete 9000 9001 9002 9003 9004
+$IPFW table 99 destroy
+$IPFW table 98 destroy
+kldunload ipfw
+```
+
+---
+
 ## Referências
 
 - [ipfw(8) man page](https://man.freebsd.org/cgi/man.cgi?ipfw)
