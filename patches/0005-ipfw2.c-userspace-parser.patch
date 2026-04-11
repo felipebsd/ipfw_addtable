@@ -1,0 +1,75 @@
+Add userspace parsing and display of the addtable action (sbin/ipfw/ipfw2.c).
+
+Syntax:  ipfw add <num> addtable <tblno> [src|dst] <body>
+--- a/sbin/ipfw/ipfw2.c	2026-04-10 14:12:28.602143000 -0300
++++ b/sbin/ipfw/ipfw2.c	2026-04-10 14:17:36.359487000 -0300
+@@ -289,6 +289,7 @@
+ 	{ "eaction",		TOK_EACTION },
+ 	{ "tcp-setmss",		TOK_TCPSETMSS },
+ 	{ "setmark",		TOK_SETMARK },
++	{ "addtable",		TOK_ADDTABLE },
+ 	{ NULL, 0 }	/* terminator */
+ };
+ 
+@@ -2264,7 +2265,15 @@
+ 			break;
+ 		}
+ 		bprintf(bp, "setmark %#x", insntoc(cmd, u32)->d[0]);
++		break;
++	case O_ADDTABLE: {
++		const ipfw_insn_addtable *at = insntoc(cmd, addtable);
++
++		bprintf(bp, "addtable %u %s",
++		    (unsigned)at->o.arg1,
++		    (at->flags & ADDTABLE_F_DST) ? "dst" : "src");
+ 		break;
++	}
+ 	default:
+ 		bprintf(bp, "** unrecognized action %d len %d ",
+ 			cmd->opcode, cmd->len);
+@@ -2416,7 +2425,7 @@
+ 	O_CHECK_STATE, O_ACCEPT, O_COUNT, O_DENY, O_REJECT,
+ 	O_UNREACH6, O_SKIPTO, O_PIPE, O_QUEUE, O_DIVERT, O_TEE,
+ 	O_NETGRAPH, O_NGTEE, O_FORWARD_IP, O_FORWARD_IP6, O_NAT,
+-	O_SETFIB, O_SETDSCP, O_REASS, O_CALLRETURN, O_SETMARK,
++	O_SETFIB, O_SETDSCP, O_REASS, O_CALLRETURN, O_SETMARK, O_ADDTABLE,
+ 	/* keep the following opcodes at the end of the list */
+ 	O_EXTERNAL_ACTION, O_EXTERNAL_INSTANCE, O_EXTERNAL_DATA
+ };
+@@ -4672,6 +4681,36 @@
+ 		break;
+ 	}
+ 
++	case TOK_ADDTABLE: {
++		ipfw_insn_addtable *at;
++		long tbl;
++		char *end;
++
++		NEED1("addtable needs a table number");
++		errno = 0;
++		tbl = strtol(*av, &end, 10);
++		if (errno == ERANGE || *end != '\0' || tbl < 0 || tbl > 65535)
++			errx(EX_USAGE,
++			    "addtable: table number must be 0-65535");
++		av++;
++
++		action->opcode = O_ADDTABLE;
++		action->len = F_INSN_SIZE(ipfw_insn_addtable);
++		CHECK_ACTLEN;
++		at = insntod(action, addtable);
++		at->o.arg1 = (uint16_t)tbl;
++		at->flags = 0;
++
++		/* optional src|dst keyword */
++		if (*av != NULL && strcasecmp(*av, "dst") == 0) {
++			at->flags = ADDTABLE_F_DST;
++			av++;
++		} else if (*av != NULL && strcasecmp(*av, "src") == 0) {
++			av++;	/* consume explicit "src", flag stays 0 */
++		}
++		break;
++	}
++
+ 	case TOK_TCPSETMSS: {
+ 		u_long mss;
+ 		uint32_t idx;

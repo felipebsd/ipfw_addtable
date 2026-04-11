@@ -1,0 +1,11 @@
+Add ip_fw_addtable.c to the ipfw kernel module build (sys/modules/ipfw/Makefile).
+--- a/sys/modules/ipfw/Makefile	2026-04-10 14:12:28.598436000 -0300
++++ b/sys/modules/ipfw/Makefile	2026-04-10 14:15:27.999961000 -0300
+@@ -5,6 +5,7 @@
+ SRCS+=	ip_fw_dynamic.c ip_fw_log.c ip_fw_eaction.c
+ SRCS+=	ip_fw_sockopt.c ip_fw_table.c ip_fw_table_algo.c ip_fw_iface.c
+ SRCS+=	ip_fw_table_value.c
++SRCS+=	ip_fw_addtable.c
+ SRCS+=	opt_inet.h opt_inet6.h opt_ipdivert.h opt_ipfw.h opt_kern_tls.h
+ 
+ CFLAGS+= -DIPFIREWALL -I${SRCTOP}/sys/contrib/ck/include

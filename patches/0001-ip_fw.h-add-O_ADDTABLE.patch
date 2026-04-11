@@ -1,0 +1,39 @@
+Add O_ADDTABLE opcode and ipfw_insn_addtable struct to sys/netinet/ip_fw.h.
+
+The opcode is inserted just before O_LAST_OPCODE so it receives the next
+available slot and does not disturb any existing values.
+
+ADDTABLE_F_DST is defined here so it is visible to userspace without
+requiring the kernel-private header.
+--- a/sys/netinet/ip_fw.h	2026-04-10 14:12:28.595287000 -0300
++++ b/sys/netinet/ip_fw.h	2026-04-10 14:14:46.254305000 -0300
+@@ -316,6 +316,8 @@
+ 
+ 	O_TABLE_LOOKUP = 99,	/* lookup: kidx=name, arg1=key	*/
+ 				/*	and flags, bitmask */
++
++	O_ADDTABLE,		/* add src/dst IP to table: arg1=tblno	*/
+ 
+ 	O_LAST_OPCODE		/* not an opcode!		*/
+ };
+@@ -393,6 +395,20 @@
+ 	ipfw_insn o;
+ 	u_int32_t d[1];	/* one or more */
+ } ipfw_insn_u32;
++
++/*
++ * Instruction layout for O_ADDTABLE.
++ *
++ * o.arg1   table number (0-65535)
++ * flags    ADDTABLE_F_DST (0x01) to add destination address;
++ *          0 (default) to add source address.
++ */
++#define	ADDTABLE_F_DST	0x01
++typedef struct _ipfw_insn_addtable {
++	ipfw_insn	o;
++	uint8_t		flags;
++	uint8_t		_pad[3];
++} ipfw_insn_addtable;
+ 
+ typedef struct _ipfw_insn_kidx {
+ 	ipfw_insn o;

@@ -1,0 +1,11 @@
+Add TOK_ADDTABLE token to the userspace ipfw token list (sbin/ipfw/ipfw2.h).
+--- a/sbin/ipfw/ipfw2.h	2026-04-10 14:12:28.600268000 -0300
++++ b/sbin/ipfw/ipfw2.h	2026-04-10 14:15:32.193905000 -0300
+@@ -328,6 +328,7 @@
+ 
+ 	TOK_SKIPACTION,
+ 	TOK_UDP_EIM,
++	TOK_ADDTABLE,
+ };
+ 
+ /*
